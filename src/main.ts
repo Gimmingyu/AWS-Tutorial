@@ -1,65 +1,101 @@
-import { STSClient } from '@aws-sdk/client-sts';
+import 'dotenv/config';
+import { AssumeRoleCommandOutput, STSClient } from '@aws-sdk/client-sts';
 import {
 	KMSClient,
 	EncryptCommand,
-	EncryptionAlgorithmSpec,
 	DecryptCommand,
+	EncryptCommandInput,
+	DecryptCommandInput,
+	EncryptCommandOutput,
+	KMSClientConfig,
+	DecryptCommandOutput,
 } from '@aws-sdk/client-kms';
 import { AssumeRoleCommand } from '@aws-sdk/client-sts';
-import 'dotenv/config';
+import { assumeRole, getAssumeRoleCommand, getSTSClient } from './sts/sts';
+import {
+	encrypt,
+	getDecryptCommand,
+	getDecryptCommandInput,
+	getEncryptCommand,
+	getEncryptCommandInput,
+	getKMSClient,
+	getKMSConfig,
+} from './kms/kms';
+import {
+	getSecretManagerClient,
+	getSecretManagerClientConfig,
+	getSecretValue,
+	getSecretValueCommand,
+	getSecretValueCommandInput,
+} from './secret_manager/secret_manager';
+import {
+	GetSecretValueCommand,
+	GetSecretValueCommandInput,
+	GetSecretValueCommandOutput,
+	SecretsManagerClient,
+	SecretsManagerClientConfig,
+} from '@aws-sdk/client-secrets-manager';
 
 async function main() {
 	try {
-		const client = new STSClient({
-			region: process.env.REGION,
-			credentials: {
-				accessKeyId: process.env.ACCESS_KEY_ID,
-				secretAccessKey: process.env.SECRET_ACCESS_KEY,
-			},
-		});
+		const client: STSClient = await getSTSClient();
 
-		const result = await client.send(
-			new AssumeRoleCommand({
-				RoleArn: process.env.ROLE_ARN,
-				RoleSessionName: process.env.ROLE_SESSION_NAME,
-				DurationSeconds: parseInt(process.env.ROLE_DURATION_SECOND),
-			})
+		const assumeRoleCommand: AssumeRoleCommand = await getAssumeRoleCommand();
+
+		const assumeRoleResult: AssumeRoleCommandOutput = await assumeRole(
+			client,
+			assumeRoleCommand
 		);
 
-		const kmsClient = new KMSClient({
-			region: process.env.REGION,
-			credentials: {
-				sessionToken: result.Credentials.SessionToken,
-				secretAccessKey: result.Credentials.SecretAccessKey,
-				accessKeyId: result.Credentials.AccessKeyId,
-				expiration: result.Credentials.Expiration,
-			},
-		});
-		const enc = new TextEncoder();
+		const kmsConfig: KMSClientConfig = await getKMSConfig(
+			assumeRoleResult.Credentials
+		);
 
-		const params = {
-			KeyId: process.env.KMS_KEY_ID,
-			Plaintext: enc.encode('dddd'),
-			EncryptionAlgorithm: EncryptionAlgorithmSpec.RSAES_OAEP_SHA_256,
-		};
+		const kmsClient: KMSClient = await getKMSClient(kmsConfig);
 
-		const command = new EncryptCommand(params);
+		const encryptCommandInput: EncryptCommandInput =
+			await getEncryptCommandInput();
 
-		const res = await kmsClient.send(command);
+		const encryptCommand: EncryptCommand = await getEncryptCommand(
+			encryptCommandInput
+		);
 
-		console.log('res = ', res);
+		const encryptResult: EncryptCommandOutput = await encrypt(
+			kmsClient,
+			encryptCommand
+		);
 
-		const decodeParam = {
-			CiphertextBlob: res.CiphertextBlob,
-			KeyId: process.env.KMS_KEY_ID,
-			EncryptionAlgorithm: EncryptionAlgorithmSpec.RSAES_OAEP_SHA_256,
-		};
+		const decryptCommandInput: DecryptCommandInput =
+			await getDecryptCommandInput(encryptResult.CiphertextBlob);
 
-		const decodeCommand = new DecryptCommand(decodeParam);
+		const decryptCommand: DecryptCommand = await getDecryptCommand(
+			decryptCommandInput
+		);
 
-		const decode = await kmsClient.send(decodeCommand);
+		const decryptResult: DecryptCommandOutput = await kmsClient.send(
+			decryptCommand
+		);
 
-		console.log(`decode = `, decode.Plaintext);
+		console.log(decryptResult);
+
+		const secretManagerClientConfig: SecretsManagerClientConfig =
+			await getSecretManagerClientConfig(assumeRoleResult.Credentials);
+
+		const secretManagerClient: SecretsManagerClient =
+			await getSecretManagerClient(secretManagerClientConfig);
+
+		const secretValueCommandInput: GetSecretValueCommandInput =
+			await getSecretValueCommandInput();
+
+		const secretValueCommand: GetSecretValueCommand =
+			await getSecretValueCommand(secretValueCommandInput);
+
+		const secretValue: GetSecretValueCommandOutput = await getSecretValue(
+			secretManagerClient,
+			secretValueCommand
+		);
+
+		console.log(secretValue);
 	} catch (error) {
 		console.error(error);
 	}
